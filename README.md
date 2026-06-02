@@ -1,0 +1,3 @@
+This project provides an automated, lightweight, and highly efficient solution to manage data integrity and clean cloud database storage ecosystems.
+
+When streaming data (like IoT sensor metrics, logs, or user transactions) hits a cloud database, processing redundant files or malformed submissions wastes computational power, bandwidth, and storage capacity. This system implements an instantaneous Validation Mechanism using cryptographic hash tracking (SHA-256) to validate incoming data structures. It automatically flags structural issues as False Positives and perfectly identical payloads as Redundant, ensuring that only verified, unique entries are appended to the cloud infrastructure.
