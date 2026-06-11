@@ -1,0 +1,137 @@
+import time
+import threading
+from flask import Flask, request, jsonify
+
+app = Flask(__name__)
+
+# ==========================================
+# SYSTEM CONFIGURATION & STATE (CLOUD STORAGE)
+# ==========================================
+# Thread lock to guarantee transactional integrity during high traffic
+booking_lock = threading.Lock()
+
+# Simulated database tables
+BUS_ROUTES = {
+    "Route-101": {"destination": "Downtown Express", "price": 15.00, "total_seats": 40},
+    "Route-202": {"destination": "Metro-Suburbs", "price": 22.50, "total_seats": 30}
+}
+
+# Real-time state metrics
+booked_tickets = {}   # Schema: { ticket_id: { "route_id": X, "user": Y, "price_paid": Z } }
+seat_allocations = {route: 0 for route in BUS_ROUTES} # Track filled seats per route
+
+# Dynamic Scaler Metrics
+metrics = {
+    "request_count": 0,
+    "active_virtual_servers": 1,
+    "last_scale_time": time.time()
+}
+
+# ==========================================
+# MIDDLEWARE: DYNAMIC SERVER PROVISIONING
+# ==========================================
+@app.before_request
+def monitor_and_scale_traffic():
+    """
+    Simulates Cloud Auto-Scaling.
+    If requests spikes excessively, the system provisions more processing servers.
+    """
+    global metrics
+    metrics["request_count"] += 1
+    
+    # Scale Up Trigger: If traffic crosses a high volume threshold
+    if metrics["request_count"] > 10 and metrics["active_virtual_servers"] == 1:
+        metrics["active_virtual_servers"] += 2
+        print(f"\n[CLOUD ALERT] Traffic Spike Detected! Provisioning 2 new server instances. Active Servers: {metrics['active_virtual_servers']}\n")
+    
+    # Simple cooldown simulator reset
+    if time.time() - metrics["last_scale_time"] > 30:
+        metrics["request_count"] = 0
+        metrics["active_virtual_servers"] = 1
+        metrics["last_scale_time"] = time.time()
+
+
+# ==========================================
+# API ENDPOINTS: SEAMLESS BOOKING ENGINE
+# ==========================================
+
+@app.route('/routes', methods=['GET'])
+def get_routes():
+    """Fetches real-time pricing and remaining seat tallies safely."""
+    available_routes = {}
+    for route_id, info in BUS_ROUTES.items():
+        available_routes[route_id] = {
+            "destination": info["destination"],
+            "fixed_price": info["price"],
+            "seats_remaining": info["total_seats"] - seat_allocations[route_id]
+        }
+    return jsonify({"routes": available_routes, "active_cloud_nodes": metrics["active_virtual_servers"]}), 200
+
+
+@app.route('/book', methods=['POST'])
+def book_ticket():
+    """
+    Handles ticket bookings. 
+    Uses thread synchronization to stop race conditions and prevent overbooking/ticket loss.
+    """
+    global booked_tickets, seat_allocations
+    data = request.json or {}
+    
+    passenger_name = data.get("passenger_name")
+    route_id = data.get("route_id")
+    offered_price = data.get("price")  # Validating client-side pricing claims
+
+    if not passenger_name or not route_id or offered_price is None:
+        return jsonify({"error": "Invalid request structural data"}), 400
+
+    if route_id not in BUS_ROUTES:
+        return jsonify({"error": "Targeted route does not exist"}), 404
+
+    route_details = BUS_ROUTES[route_id]
+
+    # STAGE 1: Prevent Incorrect Pricing Manipulations
+    if float(offered_price) != route_details["price"]:
+        return jsonify({
+            "error": "Price mismatch detected! Tampering prevention triggered.",
+            "actual_price": route_details["price"]
+        }), 400
+
+    # STAGE 2: Thread-Safe Block to Prevent Ticket Overbooking
+    with booking_lock:
+        current_booked = seat_allocations[route_id]
+        max_seats = route_details["total_seats"]
+
+        if current_booked >= max_seats:
+            return jsonify({"error": f"Booking failed. {route_id} is completely sold out!"}), 423
+
+        # Allocate seat and register the digital ticket pass securely
+        seat_allocations[route_id] += 1
+        ticket_id = f"TIX-{route_id.upper()}-{1000 + seat_allocations[route_id]}"
+        
+        booked_tickets[ticket_id] = {
+            "passenger_name": passenger_name,
+            "route_id": route_id,
+            "destination": route_details["destination"],
+            "price_paid": route_details["price"],
+            "seat_number": seat_allocations[route_id],
+            "status": "Confirmed & Verified"
+        }
+
+    return jsonify({
+        "message": "Ticket issued successfully! Pass secured in cloud registry.",
+        "ticket_details": booked_tickets[ticket_id]
+    }), 201
+
+
+@app.route('/verify/<ticket_id>', methods=['GET'])
+def verify_pass(ticket_id):
+    """Instant lookup to verify authenticity of a digital bus pass."""
+    ticket = booked_tickets.get(ticket_id)
+    if not ticket:
+        return jsonify({"error": "Ticket not found. Fraud or loss validation triggered."}), 404
+    return jsonify({"valid": True, "ticket": ticket}), 200
+
+
+if __name__ == '__main__':
+    # Binds to 0.0.0.0 to enable immediate network visibility on external environments
+    app.run(host='0.0.0.0', port=5000, debug=True)
