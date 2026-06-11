@@ -1,0 +1,93 @@
+import os
+from flask import Flask, request, jsonify, render_template_string
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+
+app = Flask(__name__)
+
+# ==========================================
+# PREDEFINED COMMERCIAL KNOWLEDGE BASE
+# ==========================================
+# Intent structure maps user inputs to standardized corporate responses
+KNOWLEDGE_BASE = [
+    {
+        "intent": "greeting",
+        "patterns": ["hi", "hello", "hey there", "is anyone there", "good day"],
+        "responses": ["Hello! Welcome to Cloud Services. How can I assist you today?", "Hi there! What can I help you with?"]
+    },
+    {
+        "intent": "pricing",
+        "patterns": ["how much does it cost", "what are your prices", "pricing plans", "subscription fees", "cost"],
+        "responses": ["Our cloud tiers start at $0/month for hobbyists, $15/month for Professionals, and custom pricing for Enterprise architectures."]
+    },
+    {
+        "intent": "bus_pass_support",
+        "patterns": ["how to book a bus pass", "ticket booking issues", "i want to buy a pass", "bus ticket cancel"],
+        "responses": ["You can manage passes instantly via our Cloud-Based Bus Pass portal. Simply enter your route and process payment safely!"]
+    },
+    {
+        "intent": "security",
+        "patterns": ["is my data safe", "sql injection prevention", "are credentials encrypted", "data leaks"],
+        "responses": ["Security is our priority. We deploy double-layer protocols including parameterized queries and AES-256 data encryption at rest."]
+    },
+    {
+        "intent": "goodbye",
+        "patterns": ["bye", "see you later", "goodbye", "thanks", "thank you"],
+        "responses": ["Happy to help! Have a wonderful day!", "Thank you for contacting us. Goodbye!"]
+    }
+]
+
+# Flatten patterns to train the vectorizer matrix
+all_patterns = []
+pattern_to_response_map = []
+
+for item in KNOWLEDGE_BASE:
+    for pattern in item["patterns"]:
+        all_patterns.append(pattern.lower())
+        pattern_to_response_map.append(item["responses"][0]) # Default to primary response
+
+# Initialize and fit TF-IDF vectorizer model
+vectorizer = TfidfVectorizer()
+tfidf_matrix = vectorizer.fit_transform(all_patterns)
+
+def generate_bot_response(user_message: str) -> str:
+    """Calculates cosine similarity to match input to the best commercial intent."""
+    user_message = user_message.lower().strip()
+    if not user_message:
+        return "I didn't catch that. Could you please rephrase?"
+
+    # Vectorize the incoming user statement
+    user_vector = vectorizer.transform([user_message])
+    
+    # Calculate similarity score against all stored patterns
+    similarities = cosine_similarity(user_vector, tfidf_matrix).flatten()
+    best_match_idx = similarities.argsort()[-1] # Fetch index of maximum match
+    
+    # Confidence threshold guardrail (0.2) to prevent completely mismatched answers
+    if similarities[best_match_idx] < 0.2:
+        return "I am trained exclusively for commercial operations. Can you please ask about pricing, data security, or pass bookings?"
+        
+    return pattern_to_response_map[best_match_idx]
+
+
+# ==========================================
+# WEB INTERFACE INTEGRATION (FRONTEND)
+# ==========================================
+HTML_INTERFACE = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CloudOps Virtual Assistant</title>
+    <style>
+        body { font-family: 'Segoe UI', Arial, sans-serif; background: #f4f6f9; margin: 0; padding: 20px; display: flex; justify-content: center; }
+        .chat-container { width: 450px; background: white; border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.1); overflow: hidden; display: flex; flex-direction: column; height: 550px; }
+        .chat-header { background: #007bff; color: white; padding: 15px; font-weight: bold; text-align: center; font-size: 1.1em; }
+        .chat-box { flex: 1; padding: 15px; overflow-y: auto; background: #fafafa; }
+        .msg { margin-bottom: 15px; padding: 10px 14px; border-radius: 8px; max-width: 75%; line-height: 1.4; font-size: 0.95em; }
+        .bot { background: #e9ecef; color: #333; align-self: flex-start; margin-right: auto; }
+        .user { background: #007bff; color: white; align-self: flex-end; margin-left: auto; text-align: right; }
+        .input-area { display: flex; border-top: 1px solid #ddd; padding: 10px; background: #fff; }
+        .input-area input { flex: 1; padding: 10px; border: 1px solid #ccc; border-radius: 4px; outline: none; }
+        .input-area button { background: #007bff; color: white; border: none; padding: 0 18px; margin-left:
