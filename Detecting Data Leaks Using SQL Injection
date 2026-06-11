@@ -1,0 +1,120 @@
+import os
+import sqlite3
+from flask import Flask, request, jsonify
+from cryptography.fernet import Fernet
+
+app = Flask(__name__)
+
+# ==========================================
+# LAYER 2: ENCRYPTION SETUP & HELPER FUNCTIONS
+# ==========================================
+# In a real cloud deployment, store this key securely in a Key Management Service (e.g., AWS KMS)
+if not os.path.exists("secret.key"):
+    key = Fernet.generate_key()
+    with open("secret.key", "wb") as key_file:
+        key_file.write(key)
+else:
+    with open("secret.key", "rb") as key_file:
+        key = key_file.read()
+
+cipher_suite = Fernet(key)
+
+def encrypt_data(data: str) -> str:
+    """Encrypts a string into AES-256 (Fernet) ciphertext."""
+    if not data:
+        return data
+    return cipher_suite.encrypt(data.encode()).decode()
+
+def decrypt_data(ciphertext: str) -> str:
+    """Decrypts AES-256 ciphertext back into a plaintext string."""
+    if not ciphertext:
+        return ciphertext
+    try:
+        return cipher_suite.decrypt(ciphertext.encode()).decode()
+    except Exception:
+        return "Decryption Error (Data potentially corrupted/tampered)"
+
+
+# ==========================================
+# DATABASE INITIALIZATION (CLOUD SIMULATION)
+# ==========================================
+def init_db():
+    """Initializes the secure user table."""
+    conn = sqlite3.connect("cloud_storage.db")
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            email TEXT NOT NULL,
+            password_hash TEXT NOT NULL  -- In production, use bcrypt/argon2 alongside Fernet
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+
+# ==========================================
+# LAYER 1: SECURE CAPABILITY CODE (API ENDPOINTS)
+# ==========================================
+
+@app.route('/register', methods=['POST'])
+def register():
+    """Registers a user by securely encrypting fields before database entry."""
+    data = request.json
+    username = data.get("username")
+    email = data.get("email")
+    password = data.get("password")
+
+    if not username or not email or not password:
+        return jsonify({"error": "Missing required fields"}), 400
+
+    # Layer 2 implementation: Encrypting sensitive data at rest
+    encrypted_email = encrypt_data(email)
+    encrypted_password = encrypt_data(password)
+
+    try:
+        conn = sqlite3.connect("cloud_storage.db")
+        cursor = conn.cursor()
+        
+        # Layer 1 implementation: Parameterized inputs strictly prevent SQL Injection
+        cursor.execute(
+            "INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)",
+            (username, encrypted_email, encrypted_password)
+        )
+        conn.commit()
+        return jsonify({"message": "User registered successfully!"}), 201
+    except sqlite3.IntegrityError:
+        return jsonify({"error": "Username already exists"}), 400
+    finally:
+        conn.close()
+
+
+@app.route('/profile/<username>', methods=['GET'])
+def get_profile(username):
+    """Fetches user data securely, automatically mitigating malicious input payloads."""
+    conn = sqlite3.connect("cloud_storage.db")
+    cursor = conn.cursor()
+
+    # SECURE: Even if the username variable contains something like "' OR '1'='1",
+    # the SQL engine treats it strictly as a string literal, not executable code.
+    cursor.execute("SELECT username, email FROM users WHERE username = ?", (username,))
+    user = cursor.fetchone()
+    conn.close()
+
+    if user:
+        # Layer 2 implementation: Data is decrypted dynamically on demand
+        decrypted_email = decrypt_data(user[1])
+        return jsonify({
+            "username": user[0],
+            "email": decrypted_email
+        }), 200
+    
+    return jsonify({"error": "User not found"}), 404
+
+
+if __name__ == '__main__':
+    init_db()
+    # Setting host='0.0.0.0' allows the system to be accessible over the internet
+    # when hosted on cloud VMs like AWS EC2 or Google Compute Engine.
+    app.run(host='0.0.0.0', port=5000, debug=True)
